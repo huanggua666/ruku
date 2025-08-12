@@ -1,7 +1,7 @@
 # 定义默认路径
 $downloadPath = "C:\Users\Administrator\Downloads\steamruku"
 $configFile = Join-Path $env:APPDATA "SteamToolConfig.ini"
-$currentVersion = "1.0.1"  # 当前脚本版本
+$currentVersion = "1.0.2"  # 当前脚本版本
 $updateUrl = "https://gh.catmak.name/https://github.com/huanggua666/ruku/blob/main/%E4%BE%BF%E6%8D%B7%E5%85%A5%E5%BA%93.ps1"
 $githubMirrors = @(
     "https://gh.catmak.name/",  # 默认首选
@@ -73,11 +73,13 @@ function Update-Script {
         foreach ($mirror in $githubMirrors) {
             $mirrorUrl = $mirror + "https://github.com/huanggua666/ruku/blob/main/%E4%BE%BF%E6%8D%B7%E5%85%A5%E5%BA%93.ps1"
             try {
+                # 使用-Encoding UTF8参数确保正确保存
                 Invoke-WebRequest -Uri $mirrorUrl -OutFile $tempFile -UseBasicParsing -ErrorAction Stop
                 
                 # 验证下载的文件
                 if (Test-Path $tempFile -PathType Leaf) {
-                    $content = Get-Content $tempFile -Raw
+                    # 强制以UTF-8编码读取文件
+                    $content = Get-Content $tempFile -Raw -Encoding UTF8
                     if ($content -match '\$currentVersion\s*=\s*"([\d\.]+)"') {
                         $success = $true
                         break
@@ -99,11 +101,15 @@ function Update-Script {
         $backupFile = "$scriptPath.bak"
         Copy-Item -Path $scriptPath -Destination $backupFile -Force
         
-        # 替换为最新版本
-        Move-Item -Path $tempFile -Destination $scriptPath -Force
+        # 替换为最新版本，确保使用UTF-8编码
+        $content = Get-Content $tempFile -Raw -Encoding UTF8
+        $content | Out-File -FilePath $scriptPath -Encoding UTF8 -Force
         
         Write-Host "脚本已成功更新到最新版本!" -ForegroundColor Green
         Write-Host "旧版本已备份为: $backupFile" -ForegroundColor Cyan
+        
+        # 删除临时文件
+        Remove-Item $tempFile -Force
         
         return $true
     }
@@ -489,6 +495,7 @@ function Show-Menu {
     Write-Host "==================== Steam 工具 ===================="
     Write-Host "==================== 作者BY黄瓜 ===================="
     Write-Host "当前Steam路径: $steamPath"
+    Write-Host "当前Tools版本:$currentVersion"
     Write-Host
     Write-Host
     Write-Host
