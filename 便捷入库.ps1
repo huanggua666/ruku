@@ -1,9 +1,8 @@
-Set-ExecutionPolicy RemoteSigned -Force
-
 # 定义默认路径
 $downloadPath = "C:\Users\Administrator\Downloads\steamruku"
 $configFile = Join-Path $env:APPDATA "SteamToolConfig.ini"
-# 在脚本开头定义备用下载镜像列表
+$currentVersion = "1.0.1"  # 当前脚本版本
+$updateUrl = "https://gh.catmak.name/https://github.com/huanggua666/ruku/blob/main/%E4%BE%BF%E6%8D%B7%E5%85%A5%E5%BA%93.ps1"
 $githubMirrors = @(
     "https://gh.catmak.name/",  # 默认首选
     "https://gh.llkk.cc/",
@@ -11,6 +10,121 @@ $githubMirrors = @(
     "https://github.dpik.top/",
     "https://ghp.ml1.one/"
 )
+
+# 检查更新的函数
+function Check-Update {
+    try {
+        Write-Host "正在检查更新..." -ForegroundColor Cyan
+        
+        # 尝试从各个镜像获取最新版本
+        $latestScriptContent = $null
+        foreach ($mirror in $githubMirrors) {
+            $mirrorUrl = $mirror + "https://github.com/huanggua666/ruku/blob/main/%E4%BE%BF%E6%8D%B7%E5%85%A5%E5%BA%93.ps1"
+            try {
+                $latestScriptContent = (Invoke-WebRequest -Uri $mirrorUrl -UseBasicParsing -ErrorAction Stop).Content
+                break  # 如果成功获取内容，跳出循环
+            }
+            catch {
+                Write-Host "镜像 $mirror 不可用: $_" -ForegroundColor Yellow
+                continue
+            }
+        }
+
+        if (-not $latestScriptContent) {
+            Write-Host "无法从任何镜像获取最新版本" -ForegroundColor Red
+            return $false
+        }
+
+        # 从脚本内容中提取版本号
+        if ($latestScriptContent -match '\$currentVersion\s*=\s*"([\d\.]+)"') {
+            $latestVersion = $matches[1]
+            
+            if ($latestVersion -gt $currentVersion) {
+                Write-Host "发现新版本: $latestVersion (当前版本: $currentVersion)" -ForegroundColor Green
+                return $true
+            } else {
+                Write-Host "当前已是最新版本 ($currentVersion)" -ForegroundColor Cyan
+                return $false
+            }
+        } else {
+            Write-Host "无法从最新脚本中提取版本号" -ForegroundColor Yellow
+            return $false
+        }
+    }
+    catch {
+        Write-Host "检查更新时出错: $_" -ForegroundColor Red
+        return $false
+    }
+}
+
+# 更新脚本的函数
+function Update-Script {
+    param (
+        [string]$scriptPath
+    )
+    
+    try {
+        Write-Host "正在下载最新版本..." -ForegroundColor Cyan
+        
+        $tempFile = Join-Path $env:TEMP "steamruku_temp.ps1"
+        $success = $false
+        
+        # 尝试从各个镜像下载
+        foreach ($mirror in $githubMirrors) {
+            $mirrorUrl = $mirror + "https://github.com/huanggua666/ruku/blob/main/%E4%BE%BF%E6%8D%B7%E5%85%A5%E5%BA%93.ps1"
+            try {
+                Invoke-WebRequest -Uri $mirrorUrl -OutFile $tempFile -UseBasicParsing -ErrorAction Stop
+                
+                # 验证下载的文件
+                if (Test-Path $tempFile -PathType Leaf) {
+                    $content = Get-Content $tempFile -Raw
+                    if ($content -match '\$currentVersion\s*=\s*"([\d\.]+)"') {
+                        $success = $true
+                        break
+                    }
+                }
+            }
+            catch {
+                Write-Host "镜像 $mirror 下载失败: $_" -ForegroundColor Yellow
+                continue
+            }
+        }
+
+        if (-not $success) {
+            Write-Host "无法从任何镜像下载最新版本" -ForegroundColor Red
+            return $false
+        }
+
+        # 备份当前脚本
+        $backupFile = "$scriptPath.bak"
+        Copy-Item -Path $scriptPath -Destination $backupFile -Force
+        
+        # 替换为最新版本
+        Move-Item -Path $tempFile -Destination $scriptPath -Force
+        
+        Write-Host "脚本已成功更新到最新版本!" -ForegroundColor Green
+        Write-Host "旧版本已备份为: $backupFile" -ForegroundColor Cyan
+        
+        return $true
+    }
+    catch {
+        Write-Host "更新脚本时出错: $_" -ForegroundColor Red
+        return $false
+    }
+}
+
+# 在显示主菜单前检查更新
+$scriptPath = $MyInvocation.MyCommand.Path
+if (Check-Update) {
+    $updateChoice = Read-Host "发现新版本，是否立即更新？(y/n)"
+    if ($updateChoice -eq 'y' -or $updateChoice -eq 'Y') {
+        if (Update-Script -scriptPath $scriptPath) {
+            Write-Host "更新完成，请重新运行脚本" -ForegroundColor Green
+            Start-Sleep 3
+            exit
+        }
+    }
+}
 
 # 保存配置函数
 function Save-Config {
@@ -431,6 +545,7 @@ function Show-Menu {
     Write-Host "2: 输入 ID 下载并处理文件"
     Write-Host "3: 自动添加游戏DLC到入库文件"
     Write-Host "4: 设置 Steam 路径 (当前: $steamPath)"
+    Write-Host "5: 检查更新"
     Write-Host "Q: 退出"
     Write-Host "===================================================="
 }
@@ -674,6 +789,22 @@ do {
             
             Pause
         }
+
+        '5' {
+        # 手动检查更新
+        if (Check-Update) {
+            $updateChoice = Read-Host "发现新版本，是否立即更新？(y/n)"
+            if ($updateChoice -eq 'y' -or $updateChoice -eq 'Y') {
+                if (Update-Script -scriptPath $scriptPath) {
+                    Write-Host "更新完成，请重新运行脚本" -ForegroundColor Green
+                    Start-Sleep 3
+                    exit
+                }
+            }
+        }
+        Pause
+    }
+
 
         'Q' {
             return
