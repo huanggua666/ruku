@@ -1,19 +1,109 @@
-﻿# 定义默认路径
+# 定义默认路径
 $downloadPath = "C:\Users\Administrator\Downloads\steamruku"
 $configFile = Join-Path $env:APPDATA "SteamToolConfig.ini"
+# 在脚本开头定义备用下载镜像列表
+$githubMirrors = @(
+    "https://gh.catmak.name/",  # 默认首选
+    "https://gh.llkk.cc/",
+    "https://ghfile.geekertao.top/",
+    "https://github.dpik.top/",
+    "https://ghp.ml1.one/"
+)
 
-# 尝试从配置文件加载Steam路径
-if (Test-Path $configFile) {
-    $config = Get-Content $configFile | ConvertFrom-StringData
-    $steamPath = $config.SteamPath
-    $luaDestination = Join-Path $steamPath "config\stplug-in"
-    $manifestDestination = Join-Path $steamPath "config\depotcache"
-} else {
-    # 默认路径
-    $steamPath = "C:\Program Files (x86)\Steam"
-    $luaDestination = Join-Path $steamPath "config\stplug-in"
-    $manifestDestination = Join-Path $steamPath "config\depotcache"
+# 保存配置函数
+function Save-Config {
+    param (
+        [string]$steamPath
+    )
+    
+    $config = @"
+SteamPath=$steamPath
+"@
+    
+    $config | Out-File -FilePath $configFile -Force -Encoding UTF8
+    Write-Host "Steam路径已保存到配置文件: $configFile"
 }
+
+# 加载配置函数
+function Load-Config {
+    if (Test-Path $configFile) {
+        try {
+            $content = Get-Content $configFile -Raw
+            # 确保配置文件格式正确
+            if ($content -match "SteamPath=(.*)") {
+                $steamPath = $matches[1].Trim()
+                if (Test-Path $steamPath) {
+                    return $steamPath
+                }
+            }
+        }
+        catch {
+            Write-Host "配置文件格式错误，将重新创建" -ForegroundColor Yellow
+        }
+    }
+    return $null
+}
+
+
+# 快速检测 Steam 路径
+function Find-SteamPath {
+    $possiblePaths = @(
+        "C:\Program Files (x86)\Steam",
+        "C:\Program Files\Steam",
+        "$env:ProgramFiles\Steam",
+        "$env:ProgramFiles(x86)\Steam",
+        "$env:LOCALAPPDATA\Steam",
+        "D:\Steam", "E:\Steam", "F:\Steam"
+    )
+
+    foreach ($path in $possiblePaths) {
+        if (Test-Path $path) {
+            $steamExe = Join-Path $path "steam.exe"
+            if (Test-Path $steamExe) {
+                return $path
+            }
+        }
+    }
+
+    try {
+        $regPath = "HKLM:\SOFTWARE\Wow6432Node\Valve\Steam"
+        if (Test-Path $regPath) {
+            $installPath = (Get-ItemProperty -Path $regPath -Name "InstallPath").InstallPath
+            if ($installPath -and (Test-Path $installPath)) {
+                return $installPath
+            }
+        }
+    }
+    catch {
+        Write-Host "无法从注册表读取 Steam 路径: $_" -ForegroundColor Yellow
+    }
+
+    return $null
+}
+
+# 尝试从配置文件或自动检测获取 Steam 路径
+$steamPath = Load-Config
+
+if (-not $steamPath) {
+    Write-Host "正在自动检测 Steam 路径..." -ForegroundColor Cyan
+    $steamPath = Find-SteamPath
+
+    if (-not $steamPath) {
+        Write-Host "未找到 Steam 路径，请手动设置！" -ForegroundColor Red
+        do {
+            $steamPath = Read-Host "请输入 Steam 安装路径（例如：C:\Program Files (x86)\Steam）"
+            if (-not (Test-Path $steamPath)) {
+                Write-Host "路径无效，请重新输入！" -ForegroundColor Red
+            }
+        } while (-not (Test-Path $steamPath))
+    }
+
+    Save-Config -steamPath $steamPath
+}
+
+# 设置子目录路径
+$luaDestination = Join-Path $steamPath "config\stplug-in"
+$manifestDestination = Join-Path $steamPath "config\depotcache"
 
 # 创建必要的目录
 if (-not (Test-Path $downloadPath)) {
@@ -26,38 +116,54 @@ if (-not (Test-Path $manifestDestination)) {
     New-Item -ItemType Directory -Path $manifestDestination -Force | Out-Null
 }
 
-# 优化的下载函数
 function Download-File {
     param (
         [string]$url,
         [string]$outputFile,
         [int]$retryCount = 3,
-        [int]$timeoutSeconds = 30
+        [int]$timeoutSeconds = 30,
+        [switch]$isGithubUrl = $false
     )
-    
+
+    # 强制使用 TLS 1.2
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
     $success = $false
     $attempt = 0
-    
+    $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+
+    # 处理 GitHub 加速链接的特殊逻辑
+    if ($isGithubUrl) {
+        # 确保 URL 格式正确（移除重复的 https://）
+        $url = $url -replace "^https?://[^/]+/https?://", "https://"
+        # 如果是 GitHub 原始链接，转换为 raw 格式
+        $url = $url -replace "github.com/(.*?)/blob/", "raw.githubusercontent.com/`$1/"
+    }
+
     do {
         $attempt++
         try {
-            Write-Host "尝试下载 (尝试 $attempt/$retryCount)..."
+            Write-Host "尝试下载 (第 $attempt 次尝试，URL: $url)..."
             
-            # 使用WebClient下载（比Invoke-WebRequest更快）
+            # 使用 WebClient 并配置参数
             $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", $userAgent)
             $webClient.Proxy = [System.Net.WebRequest]::GetSystemWebProxy()
             $webClient.Proxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
-            
-            # 设置超时（毫秒）
             $webClient.DownloadFile($url, $outputFile)
             
             $success = $true
-            Write-Host "下载完成！"
+            Write-Host "下载成功！保存到: $outputFile"
         }
         catch {
-            Write-Host "下载失败: $_"
+            Write-Host "下载失败: $($_.Exception.Message)"
             if ($attempt -lt $retryCount) {
                 Start-Sleep -Seconds 2
+                # 如果是 GitHub 链接，尝试下一个镜像（仅限第一次失败后）
+                if ($isGithubUrl -and $attempt -eq 1) {
+                    $url = $url -replace "//gh.catmak.name/", "//gh.llkk.cc/"
+                    Write-Host "正在尝试备用镜像: $url"
+                }
             }
         }
         finally {
@@ -66,9 +172,10 @@ function Download-File {
             }
         }
     } while (-not $success -and $attempt -lt $retryCount)
-    
+
     return $success
 }
+
 
 # 保存配置函数
 function Save-Config {
@@ -156,6 +263,60 @@ function Add-DlcToLua {
     
     Write-Host "DLC配置已更新到文件: $luaFile"
 }
+
+function Initialize-HidDll {
+    $hidDllPath = Join-Path $steamPath "hid.dll"
+    $correctSize = 548808  # 535 KB 的标准字节数
+
+    # 检查文件是否存在且大小完全匹配
+    if (Test-Path $hidDllPath) {
+        $currentSize = (Get-Item $hidDllPath).Length
+        if ($currentSize -eq $correctSize) {
+            Write-Host "hid.dll 已存在且大小正确（$currentSize 字节），跳过下载" -ForegroundColor Green
+            return
+        } else {
+            Write-Host "检测到异常 hid.dll（当前大小: $currentSize 字节，应有: $correctSize 字节）" -ForegroundColor Red
+            Remove-Item $hidDllPath -Force
+            Write-Host "已删除无效文件，将重新下载..." -ForegroundColor Yellow
+        }
+    }
+
+  # 定义多个可能的下载源（按优先级排序）
+    $mirrors = @(
+
+        "https://cdn.jsdelivr.net/gh/huanggua666/.../hid.dll",  # JSDelivr CDN
+        "https://gitcode.net/mirrors/huanggua666/.../-/raw/main/hid.dll"  # 国内镜像
+    )
+
+
+    # 尝试所有镜像直到下载成功
+    foreach ($url in $mirrors) {
+        try {
+            Write-Host "正在从镜像 [$url] 下载..." -ForegroundColor Cyan
+            if (Download-File -url $url -outputFile $hidDllPath -isGithubUrl) {
+                # 二次验证下载的文件大小
+                $downloadedSize = (Get-Item $hidDllPath).Length
+
+                    Write-Host "hid.dll 下载验证通过（$downloadedSize 字节）" -ForegroundColor Green
+                    return
+            }
+        }
+        catch {
+            Write-Host "镜像 [$url] 下载失败: $_" -ForegroundColor DarkYellow
+        }
+    }
+
+    # 所有镜像均失败时的处理
+    Write-Host "`n无法自动下载有效 hid.dll，请手动操作：" -ForegroundColor Red
+    Write-Host "1. 从以下地址下载 hid.dll："
+    Write-Host "   https://github.com/huanggua666/.../raw/main/hid.dll"
+    Write-Host "2. 手动复制到: $steamPath"
+    Write-Host "3. 按任意键继续..." -ForegroundColor Yellow
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
+
+# 在显示菜单前调用初始化函数
+Initialize-HidDll
 
 # 显示菜单
 function Show-Menu {
@@ -302,7 +463,10 @@ do {
             # 使用foreach循环处理每个ID
             foreach ($id in $idList) {
                 Write-Host "`n正在处理ID: $id"
-                $url = "https://tvv.tw//https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$id.zip"
+                if (-not (Download-File -url "https://gh.catmak.name/https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$id.zip" -outputFile $zipFile -isGithubUrl)) {
+    Write-Host "所有镜像下载失败，请检查网络连接或稍后再试"
+    continue
+}
                 
                 try {
                     # 下载文件
@@ -395,7 +559,10 @@ do {
     
     # 先执行功能2的操作（下载并处理文件）
     Write-Host "`n下载并处理文件..."
-    $url = "http://tvv.tw/https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$appId.zip"
+    if (-not (Download-File -url "https://gh.catmak.name/https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$appId.zip" -outputFile $zipFile -isGithubUrl)) {
+    Write-Host "所有镜像下载失败，请检查网络连接或稍后再试"
+    continue
+}
     
     try {
         # 下载文件
