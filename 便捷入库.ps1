@@ -1,3 +1,5 @@
+Set-ExecutionPolicy RemoteSigned -Force
+
 # 定义默认路径
 $downloadPath = "C:\Users\Administrator\Downloads\steamruku"
 $configFile = Join-Path $env:APPDATA "SteamToolConfig.ini"
@@ -43,7 +45,6 @@ function Load-Config {
     }
     return $null
 }
-
 
 # 快速检测 Steam 路径
 function Find-SteamPath {
@@ -121,8 +122,7 @@ function Download-File {
         [string]$url,
         [string]$outputFile,
         [int]$retryCount = 3,
-        [int]$timeoutSeconds = 30,
-        [switch]$isGithubUrl = $false
+        [int]$timeoutSec = 30
     )
 
     # 强制使用 TLS 1.2
@@ -132,43 +132,40 @@ function Download-File {
     $attempt = 0
     $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
-    # 处理 GitHub 加速链接的特殊逻辑
-    if ($isGithubUrl) {
-        # 确保 URL 格式正确（移除重复的 https://）
-        $url = $url -replace "^https?://[^/]+/https?://", "https://"
-        # 如果是 GitHub 原始链接，转换为 raw 格式
-        $url = $url -replace "github.com/(.*?)/blob/", "raw.githubusercontent.com/`$1/"
+    # 确保输出目录存在
+    $outputDir = Split-Path $outputFile -Parent
+    if (-not (Test-Path $outputDir)) {
+        New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
     }
 
     do {
         $attempt++
         try {
-            Write-Host "尝试下载 (第 $attempt 次尝试，URL: $url)..."
-            
-            # 使用 WebClient 并配置参数
+            Write-Host "正在尝试下载 (第 $attempt 次尝试)..." -ForegroundColor Cyan
+            Write-Host "URL: $url"
+            Write-Host "保存到: $outputFile"
+
+            # 方法1：使用WebClient
             $webClient = New-Object System.Net.WebClient
             $webClient.Headers.Add("User-Agent", $userAgent)
-            $webClient.Proxy = [System.Net.WebRequest]::GetSystemWebProxy()
-            $webClient.Proxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
             $webClient.DownloadFile($url, $outputFile)
             
-            $success = $true
-            Write-Host "下载成功！保存到: $outputFile"
-        }
-        catch {
-            Write-Host "下载失败: $($_.Exception.Message)"
-            if ($attempt -lt $retryCount) {
-                Start-Sleep -Seconds 2
-                # 如果是 GitHub 链接，尝试下一个镜像（仅限第一次失败后）
-                if ($isGithubUrl -and $attempt -eq 1) {
-                    $url = $url -replace "//gh.catmak.name/", "//gh.llkk.cc/"
-                    Write-Host "正在尝试备用镜像: $url"
-                }
+            # 验证下载的文件
+            if (Test-Path $outputFile) {
+                $fileSize = (Get-Item $outputFile).Length
+                Write-Host "下载成功！文件大小: $([math]::Round($fileSize/1KB,2)) KB" -ForegroundColor Green
+                $success = $true
+            } else {
+                throw "文件未正确保存"
             }
         }
-        finally {
-            if ($webClient -ne $null) {
-                $webClient.Dispose()
+        catch {
+            Write-Host "下载失败 (尝试 $attempt): $($_.Exception.Message)" -ForegroundColor Red
+            if (Test-Path $outputFile) { Remove-Item $outputFile -Force }
+            
+            # 最后一次尝试前增加等待时间
+            if ($attempt -lt $retryCount) {
+                Start-Sleep -Seconds 2
             }
         }
     } while (-not $success -and $attempt -lt $retryCount)
@@ -176,6 +173,56 @@ function Download-File {
     return $success
 }
 
+function Initialize-HidDll {
+    $hidDllPath = Join-Path $steamPath "hid.dll"
+    $correctSize = 591272  # 正确的文件大小（字节）
+
+    # 检查文件是否存在且大小正确
+    if (Test-Path $hidDllPath) {
+        $currentSize = (Get-Item $hidDllPath).Length
+        if ($currentSize -eq $correctSize) {
+            Write-Host "hid.dll 已存在且大小正确（$currentSize 字节），跳过下载" -ForegroundColor Green
+            return $true
+        } else {
+            Write-Host "检测到异常 hid.dll（当前大小: $currentSize 字节，应有: $correctSize 字节）" -ForegroundColor Red
+            Remove-Item $hidDllPath -Force
+            Write-Host "已删除无效文件，将重新下载..." -ForegroundColor Yellow
+        }
+    }
+
+    # 使用可靠的下载源（直接GitHub原始链接）
+    $url = "https://gh.catmak.name/https://github.com/huanggua666/ruku/blob/main/hid.dll"
+    
+    Write-Host "正在从 GitHub 下载 hid.dll..." -ForegroundColor Cyan
+    
+    if (Download-File -url $url -outputFile $hidDllPath) {
+        # 最终验证
+        if ((Test-Path $hidDllPath) -and ((Get-Item $hidDllPath).Length -eq $correctSize)) {
+            Write-Host "hid.dll 下载验证通过！" -ForegroundColor Green
+            return $true
+        } else {
+            Write-Host "下载的文件大小不正确" -ForegroundColor Red
+            Remove-Item $hidDllPath -Force
+        }
+    }
+
+    # 所有方法都失败
+    Write-Host "`n无法自动下载 hid.dll，请手动操作：" -ForegroundColor Red
+    Write-Host "1. 从这里下载: https://cdn.jsdelivr.net/gh/huanggua666/ruku/hid.dll"
+    Write-Host "2. 复制到: $steamPath"
+    Write-Host "3. 按任意键继续..." -ForegroundColor Yellow
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    return $false
+}
+
+
+# 确保BITS服务已启动
+try {
+    Start-Service -Name BITS -ErrorAction SilentlyContinue
+}
+catch {
+    Write-Host "无法启动BITS服务，将使用备用下载方法" -ForegroundColor Yellow
+}
 
 # 保存配置函数
 function Save-Config {
@@ -264,56 +311,7 @@ function Add-DlcToLua {
     Write-Host "DLC配置已更新到文件: $luaFile"
 }
 
-function Initialize-HidDll {
-    $hidDllPath = Join-Path $steamPath "hid.dll"
-    $correctSize = 548808  # 535 KB 的标准字节数
 
-    # 检查文件是否存在且大小完全匹配
-    if (Test-Path $hidDllPath) {
-        $currentSize = (Get-Item $hidDllPath).Length
-        if ($currentSize -eq $correctSize) {
-            Write-Host "hid.dll 已存在且大小正确（$currentSize 字节），跳过下载" -ForegroundColor Green
-            return
-        } else {
-            Write-Host "检测到异常 hid.dll（当前大小: $currentSize 字节，应有: $correctSize 字节）" -ForegroundColor Red
-            Remove-Item $hidDllPath -Force
-            Write-Host "已删除无效文件，将重新下载..." -ForegroundColor Yellow
-        }
-    }
-
-  # 定义多个可能的下载源（按优先级排序）
-    $mirrors = @(
-
-        "https://cdn.jsdelivr.net/gh/huanggua666/.../hid.dll",  # JSDelivr CDN
-        "https://gitcode.net/mirrors/huanggua666/.../-/raw/main/hid.dll"  # 国内镜像
-    )
-
-
-    # 尝试所有镜像直到下载成功
-    foreach ($url in $mirrors) {
-        try {
-            Write-Host "正在从镜像 [$url] 下载..." -ForegroundColor Cyan
-            if (Download-File -url $url -outputFile $hidDllPath -isGithubUrl) {
-                # 二次验证下载的文件大小
-                $downloadedSize = (Get-Item $hidDllPath).Length
-
-                    Write-Host "hid.dll 下载验证通过（$downloadedSize 字节）" -ForegroundColor Green
-                    return
-            }
-        }
-        catch {
-            Write-Host "镜像 [$url] 下载失败: $_" -ForegroundColor DarkYellow
-        }
-    }
-
-    # 所有镜像均失败时的处理
-    Write-Host "`n无法自动下载有效 hid.dll，请手动操作：" -ForegroundColor Red
-    Write-Host "1. 从以下地址下载 hid.dll："
-    Write-Host "   https://github.com/huanggua666/.../raw/main/hid.dll"
-    Write-Host "2. 手动复制到: $steamPath"
-    Write-Host "3. 按任意键继续..." -ForegroundColor Yellow
-    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-}
 
 # 在显示菜单前调用初始化函数
 Initialize-HidDll
@@ -321,59 +319,59 @@ Initialize-HidDll
 # 显示菜单
 function Show-Menu {
     Clear-Host
-Write-Host -NoNewline "                                                                                                                               `r"
-Write-Host -NoNewline "                                                        %@@@@@@@@@@@@                                                          `r"
-Write-Host -NoNewline "                                                   @@@@@@@@@@@@@@@@@@@@@@                                                     `r"
-Write-Host -NoNewline "                                                %@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                  `r"
-Write-Host -NoNewline "                                              @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                               `r"
-Write-Host -NoNewline "                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:                                             `r"
-Write-Host -NoNewline "                                          %@@@@@@@@@@@@@@@@@@@@@@@@:        %@@@@@@                                            `r"
-Write-Host -NoNewline "                                         @@@@@@@@@@@@@@@@@@@@@@@@    @@@@@@@@  @@@@@                                           `r"
-Write-Host -NoNewline "                                        @@@@@@@@@@@@@@@@@@@@@@@     @        @  :@@@@                                         `r"
-Write-Host -NoNewline "                                       @@@@@@@@@@@@@@@@@@@@@@@     @         :@   @@@@                                        `r"
-Write-Host -NoNewline "                                      @@@@@@@@@@@@@@@@@@@@@@@     @           -@   @@@@@                                        `r"
-Write-Host -NoNewline "                                    @@@@@@@@@@@@@@@@@@@@@@@@     @             @   @@@@@@                                      `r"
-Write-Host -NoNewline "                                    @@@@@@@@@@@@@@@@@@@@@@        @           @    @@@@@@@                                     `r"
-Write-Host -NoNewline "                                    *@@@@@@@@@@@@@@@@@@@@.         @         @    @@@@@@@@                                     `r"
-Write-Host -NoNewline "                                        *@@@@@@@@@@@@@@@            @@@@@@@@@    @@@@@@@@@                                     `r"
-Write-Host -NoNewline "                                            +@@@@@@@@@@                         @@@@@@@@@@                                     `r"
-Write-Host -NoNewline "                                                +@@                           @@@@@@@@@@@@                                     `r"
-Write-Host -NoNewline "                                                     @@@@@                 @@@@@@@@@@@@@@@                                     `r"
-Write-Host -NoNewline "                                                          @           @@@@@@@@@@@@@@@@@@@                                      `r"
-Write-Host -NoNewline "                                      @@@                  @   @@@@@@@@@@@@@@@@@@@@@@@%                                       `r"
-Write-Host -NoNewline "                                       @@@@@@    @        @   -@@@@@@@@@@@@@@@@@@@@@@@@                                        `r"
-Write-Host -NoNewline "                                       .@@@@@@    @      @    @@@@@@@@@@@@@@@@@@@@@@@@                                         `r"
-Write-Host -NoNewline "                                         @@@@@@-   @@@@@@    @@@@@@@@@@@@@@@@@@@@@@@%                                          `r"
-Write-Host -NoNewline "                                          @@@@@@@           @@@@@@@@@@@@@@@@@@@@@@@                                            `r"
-Write-Host -NoNewline "                                            @@@@@@@@:    @@@@@@@@@@@@@@@@@@@@@@@@@                                             `r"
-Write-Host -NoNewline "                                             *@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                               `r"
-Write-Host -NoNewline "                                                @@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                  `r"
-Write-Host -NoNewline "                                                   @@@@@@@@@@@@@@@@@@@@@@@%                                                    `r"
-Write-Host -NoNewline "                                                       @@@@@@@@@@@@@@@+                                                        `r"
-Write-Host -NoNewline "          _____                _____                    _____                    _____                    _____          `r"
-Write-Host -NoNewline "         /\    \              /\    \                  /\    \                  /\    \                  /\    \         `r"
-Write-Host -NoNewline "        /::\    \            /::\    \                /::\    \                /::\    \                /::\____\        `r"
-Write-Host -NoNewline "       /::::\    \           \:::\    \              /::::\    \              /::::\    \              /::::|   |        `r"
-Write-Host -NoNewline "      /::::::\    \           \:::\    \            /::::::\    \            /::::::\    \            /:::::|   |        `r"
-Write-Host -NoNewline "     /:::/\:::\    \           \:::\    \          /:::/\:::\    \          /:::/\:::\    \          /::::::|   |        `r"
-Write-Host -NoNewline "    /:::/__\:::\    \           \:::\    \        /:::/__\:::\    \        /:::/__\:::\    \        /:::/|::|   |        `r"
-Write-Host -NoNewline "    \:::\   \:::\    \          /::::\    \      /::::\   \:::\    \      /::::\   \:::\    \      /:::/ |::|   |        `r"
-Write-Host -NoNewline "  ___\:::\   \:::\    \        /::::::\    \    /::::::\   \:::\    \    /::::::\   \:::\    \    /:::/  |::|___|______  `r"
-Write-Host -NoNewline " /\   \:::\   \:::\    \      /:::/\:::\    \  /:::/\:::\   \:::\    \  /:::/\:::\   \:::\    \  /:::/   |::::::::\    \ `r"
-Write-Host -NoNewline "/::\   \:::\   \:::\____\    /:::/  \:::\____\/:::/__\:::\   \:::\____\/:::/  \:::\   \:::\____\/:::/    |:::::::::\____\`r"
-Write-Host -NoNewline "\:::\   \:::\   \::/    /   /:::/    \::/    /\:::\   \:::\   \::/    /\::/    \:::\  /:::/    /\::/    / ~~~~~/:::/    /`r"
-Write-Host -NoNewline " \:::\   \:::\   \/____/   /:::/    / \/____/  \:::\   \:::\   \/____/  \/____/ \:::\/:::/    /  \/____/      /:::/    / `r"
-Write-Host -NoNewline "  \:::\   \:::\    \      /:::/    /            \:::\   \:::\    \               \::::::/    /               /:::/    /  `r"
-Write-Host -NoNewline "   \:::\   \:::\____\    /:::/    /              \:::\   \:::\____\               \::::/    /               /:::/    /   `r"
-Write-Host -NoNewline "    \:::\  /:::/    /    \::/    /                \:::\   \::/    /               /:::/    /               /:::/    /    `r"
-Write-Host -NoNewline "     \:::\/:::/    /      \/____/                  \:::\   \/____/               /:::/    /               /:::/    /     `r"
-Write-Host -NoNewline "      \::::::/    /                                 \:::\    \                  /:::/    /               /:::/    /      `r"
-Write-Host -NoNewline "       \::::/    /                                   \:::\____\                /:::/    /               /:::/    /       `r"
-Write-Host -NoNewline "        \::/    /                                     \::/    /                \::/    /                \::/    /        `r"
-Write-Host -NoNewline "         \/____/                                       \/____/                  \/____/                  \/____/         `r"
-Write-Host
-Write-Host
-Write-Host
+    Write-Host -NoNewline "                                                                                                                               `r"
+    Write-Host -NoNewline "                                                        %@@@@@@@@@@@@                                                          `r"
+    Write-Host -NoNewline "                                                   @@@@@@@@@@@@@@@@@@@@@@@@@@                                                     `r"
+    Write-Host -NoNewline "                                                %@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                  `r"
+    Write-Host -NoNewline "                                              @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                               `r"
+    Write-Host -NoNewline "                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:                                             `r"
+    Write-Host -NoNewline "                                          %@@@@@@@@@@@@@@@@@@@@@@@@:        %@@@@@@                                            `r"
+    Write-Host -NoNewline "                                         @@@@@@@@@@@@@@@@@@@@@@@@    @@@@@@@@  @@@@@                                           `r"
+    Write-Host -NoNewline "                                        @@@@@@@@@@@@@@@@@@@@@@@     @        @  :@@@@                                         `r"
+    Write-Host -NoNewline "                                       @@@@@@@@@@@@@@@@@@@@@@@     @         :@   @@@@                                        `r"
+    Write-Host -NoNewline "                                      @@@@@@@@@@@@@@@@@@@@@@@     @           -@   @@@@@                                        `r"
+    Write-Host -NoNewline "                                    @@@@@@@@@@@@@@@@@@@@@@@@     @             @   @@@@@@                                      `r"
+    Write-Host -NoNewline "                                    @@@@@@@@@@@@@@@@@@@@@@        @           @    @@@@@@@                                     `r"
+    Write-Host -NoNewline "                                    *@@@@@@@@@@@@@@@@@@@@.         @         @    @@@@@@@@                                     `r"
+    Write-Host -NoNewline "                                        *@@@@@@@@@@@@@@@            @@@@@@@@@    @@@@@@@@@                                     `r"
+    Write-Host -NoNewline "                                            +@@@@@@@@@@                         @@@@@@@@@@                                     `r"
+    Write-Host -NoNewline "                                                +@@                           @@@@@@@@@@@@                                     `r"
+    Write-Host -NoNewline "                                                     @@@@@                 @@@@@@@@@@@@@@@                                     `r"
+    Write-Host -NoNewline "                                                          @           @@@@@@@@@@@@@@@@@@@                                      `r"
+    Write-Host -NoNewline "                                      @@@                  @   @@@@@@@@@@@@@@@@@@@@@@@%                                       `r"
+    Write-Host -NoNewline "                                       @@@@@@    @        @   -@@@@@@@@@@@@@@@@@@@@@@@@                                        `r"
+    Write-Host -NoNewline "                                       .@@@@@@    @      @    @@@@@@@@@@@@@@@@@@@@@@@@                                         `r"
+    Write-Host -NoNewline "                                         @@@@@@-   @@@@@@    @@@@@@@@@@@@@@@@@@@@@@@%                                          `r"
+    Write-Host -NoNewline "                                          @@@@@@@           @@@@@@@@@@@@@@@@@@@@@@@                                            `r"
+    Write-Host -NoNewline "                                            @@@@@@@@:    @@@@@@@@@@@@@@@@@@@@@@@@@                                             `r"
+    Write-Host -NoNewline "                                             *@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                               `r"
+    Write-Host -NoNewline "                                                @@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                  `r"
+    Write-Host -NoNewline "                                                   @@@@@@@@@@@@@@@@@@@@@@@%                                                    `r"
+    Write-Host -NoNewline "                                                       @@@@@@@@@@@@@@@+                                                        `r"
+    Write-Host -NoNewline "          _____                _____                    _____                    _____                    _____          `r"
+    Write-Host -NoNewline "         /\    \              /\    \                  /\    \                  /\    \                  /\    \         `r"
+    Write-Host -NoNewline "        /::\    \            /::\    \                /::\    \                /::\    \                /::\____\        `r"
+    Write-Host -NoNewline "       /::::\    \           \:::\    \              /::::\    \              /::::\    \              /::::|   |        `r"
+    Write-Host -NoNewline "      /::::::\    \           \:::\    \            /::::::\    \            /::::::\    \            /:::::|   |        `r"
+    Write-Host -NoNewline "     /:::/\:::\    \           \:::\    \          /:::/\:::\    \          /:::/\:::\    \          /::::::|   |        `r"
+    Write-Host -NoNewline "    /:::/__\:::\    \           \:::\    \        /:::/__\:::\    \        /:::/__\:::\    \        /:::/|::|   |        `r"
+    Write-Host -NoNewline "    \:::\   \:::\    \          /::::\    \      /::::\   \:::\    \      /::::\   \:::\    \      /:::/ |::|   |        `r"
+    Write-Host -NoNewline "  ___\:::\   \:::\    \        /::::::\    \    /::::::\   \:::\    \    /::::::\   \:::\    \    /:::/  |::|___|______  `r"
+    Write-Host -NoNewline " /\   \:::\   \:::\    \      /:::/\:::\    \  /:::/\:::\   \:::\    \  /:::/\:::\   \:::\    \  /:::/   |::::::::\    \ `r"
+    Write-Host -NoNewline "/::\   \:::\   \:::\____\    /:::/  \:::\____\/:::/__\:::\   \:::\____\/:::/  \:::\   \:::\____\/:::/    |:::::::::\____\`r"
+    Write-Host -NoNewline "\:::\   \:::\   \::/    /   /:::/    \::/    /\:::\   \:::\   \::/    /\::/    \:::\  /:::/    /\::/    / ~~~~~/:::/    /`r"
+    Write-Host -NoNewline " \:::\   \:::\   \/____/   /:::/    / \/____/  \:::\   \:::\   \/____/  \/____/ \:::\/:::/    /  \/____/      /:::/    / `r"
+    Write-Host -NoNewline "  \:::\   \:::\    \      /:::/    /            \:::\   \:::\    \               \::::::/    /               /:::/    /  `r"
+    Write-Host -NoNewline "   \:::\   \:::\____\    /:::/    /              \:::\   \:::\____\               \::::/    /               /:::/    /   `r"
+    Write-Host -NoNewline "    \:::\  /:::/    /    \::/    /                \:::\   \::/    /               /:::/    /               /:::/    /    `r"
+    Write-Host -NoNewline "     \:::\/:::/    /      \/____/                  \:::\   \/____/               /:::/    /               /:::/    /     `r"
+    Write-Host -NoNewline "      \::::::/    /                                 \:::\    \                  /:::/    /               /:::/    /      `r"
+    Write-Host -NoNewline "       \::::/    /                                   \:::\____\                /:::/    /               /:::/    /       `r"
+    Write-Host -NoNewline "        \::/    /                                     \::/    /                \::/    /                \::/    /        `r"
+    Write-Host -NoNewline "         \/____/                                       \/____/                  \/____/                  \/____/         `r"
+    Write-Host
+    Write-Host
+    Write-Host
     Write-Host "==================== Steam 工具 ===================="
     Write-Host "==================== 作者BY黄瓜 ===================="
     Write-Host "当前Steam路径: $steamPath"
@@ -463,53 +461,50 @@ do {
             # 使用foreach循环处理每个ID
             foreach ($id in $idList) {
                 Write-Host "`n正在处理ID: $id"
-                if (-not (Download-File -url "https://gh.catmak.name/https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$id.zip" -outputFile $zipFile -isGithubUrl)) {
-    Write-Host "所有镜像下载失败，请检查网络连接或稍后再试"
-    continue
-}
+                
+                # 构建下载URL
+                $url = "https://gh.catmak.name/https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$id.zip"
+                $zipFile = Join-Path $downloadPath "$id.zip"
+                
+                if (-not (Download-File -url $url -outputFile $zipFile -isGithubUrl)) {
+                    Write-Host "所有镜像下载失败，请检查网络连接或稍后再试"
+                    continue
+                }
                 
                 try {
-                    # 下载文件
-                    $zipFile = Join-Path $downloadPath "$id.zip"
+                    Write-Host "下载完成，正在解压..."
                     
-                    # 使用优化的下载函数
-                    if (Download-File -url $url -outputFile $zipFile) {
-                        Write-Host "下载完成，正在解压..."
+                    # 解压文件
+                    Expand-Archive -Path $zipFile -DestinationPath $downloadPath -Force
+                    
+                    # 删除zip文件
+                    Remove-Item $zipFile -Force
+                    
+                    # 查找解压后的文件夹
+                    $extractedFolder = Get-ChildItem -Path $downloadPath -Directory | 
+                        Where-Object { $_.Name -like "ManifestHub-*" } | 
+                        Select-Object -First 1
+                    
+                    if ($extractedFolder) {
+                        # 移动.lua文件
+                        Get-ChildItem -Path $extractedFolder.FullName -Filter "*.lua" -Recurse | 
+                            ForEach-Object {
+                                Move-Item -Path $_.FullName -Destination $luaDestination -Force
+                                Write-Host "已移动 $($_.Name) 到 $luaDestination"
+                            }
                         
-                        # 解压文件
-                        Expand-Archive -Path $zipFile -DestinationPath $downloadPath -Force
+                        # 移动.manifest文件
+                        Get-ChildItem -Path $extractedFolder.FullName -Filter "*.manifest" -Recurse | 
+                            ForEach-Object {
+                                Move-Item -Path $_.FullName -Destination $manifestDestination -Force
+                                Write-Host "已移动 $($_.Name) 到 $manifestDestination"
+                            }
                         
-                        # 删除zip文件
-                        Remove-Item $zipFile -Force
-                        
-                        # 查找解压后的文件夹
-                        $extractedFolder = Get-ChildItem -Path $downloadPath -Directory | 
-                            Where-Object { $_.Name -like "ManifestHub-*" } | 
-                            Select-Object -First 1
-                        
-                        if ($extractedFolder) {
-                            # 移动.lua文件
-                            Get-ChildItem -Path $extractedFolder.FullName -Filter "*.lua" -Recurse | 
-                                ForEach-Object {
-                                    Move-Item -Path $_.FullName -Destination $luaDestination -Force
-                                    Write-Host "已移动 $($_.Name) 到 $luaDestination"
-                                }
-                            
-                            # 移动.manifest文件
-                            Get-ChildItem -Path $extractedFolder.FullName -Filter "*.manifest" -Recurse | 
-                                ForEach-Object {
-                                    Move-Item -Path $_.FullName -Destination $manifestDestination -Force
-                                    Write-Host "已移动 $($_.Name) 到 $manifestDestination"
-                                }
-                            
-                            # 删除解压的文件夹
-                            Remove-Item $extractedFolder.FullName -Recurse -Force
-                            Write-Host "ID $id 处理完成！"
-                        } else {
-                            Write-Host "未找到解压后的文件夹"
-                        }
+                        # 删除解压的文件夹
+                        Remove-Item $extractedFolder.FullName -Recurse -Force
+                        Write-Host "ID $id 处理完成！"
                     } else {
-                        Write-Host "ID $id 下载失败，请检查ID是否正确或网络连接是否正常或DLC不支持清单！"
+                        Write-Host "未找到解压后的文件夹"
                     }
                 }
                 catch {
@@ -547,113 +542,108 @@ do {
             Pause
         }
         
-'3' {
-    # 自动添加游戏DLC到入库文件（先执行功能2再执行功能3）
-    $appId = Read-Host "请输入游戏ID(挂梯子)"
-    
-    if (-not ($appId -match '^\d+$')) {
-        Write-Host "无效的游戏ID，请输入数字"
-        Pause
-        continue
-    }
-    
-    # 先执行功能2的操作（下载并处理文件）
-    Write-Host "`n下载并处理文件..."
-    if (-not (Download-File -url "https://gh.catmak.name/https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$appId.zip" -outputFile $zipFile -isGithubUrl)) {
-    Write-Host "所有镜像下载失败，请检查网络连接或稍后再试"
-    continue
-}
-    
-    try {
-        # 下载文件
-        $zipFile = Join-Path $downloadPath "$appId.zip"
-        
-        # 使用优化的下载函数
-        if (Download-File -url $url -outputFile $zipFile) {
-            Write-Host "下载完成，正在解压..."
+        '3' {
+            # 自动添加游戏DLC到入库文件（先执行功能2再执行功能3）
+            $appId = Read-Host "请输入游戏ID(挂梯子)"
             
-            # 解压文件
-            Expand-Archive -Path $zipFile -DestinationPath $downloadPath -Force
-            
-            # 删除zip文件
-            Remove-Item $zipFile -Force
-            
-            # 查找解压后的文件夹
-            $extractedFolder = Get-ChildItem -Path $downloadPath -Directory | 
-                Where-Object { $_.Name -like "ManifestHub-*" } | 
-                Select-Object -First 1
-            
-            if ($extractedFolder) {
-                # 移动.lua文件
-                Get-ChildItem -Path $extractedFolder.FullName -Filter "*.lua" -Recurse | 
-                    ForEach-Object {
-                        Move-Item -Path $_.FullName -Destination $luaDestination -Force
-                        Write-Host "已移动 $($_.Name) 到 $luaDestination"
-                    }
-                
-                # 移动.manifest文件
-                Get-ChildItem -Path $extractedFolder.FullName -Filter "*.manifest" -Recurse | 
-                    ForEach-Object {
-                        Move-Item -Path $_.FullName -Destination $manifestDestination -Force
-                        Write-Host "已移动 $($_.Name) 到 $manifestDestination"
-                    }
-                
-                # 删除解压的文件夹
-                Remove-Item $extractedFolder.FullName -Recurse -Force
-                Write-Host "ID $appId 文件处理完成！"
-            } else {
-                Write-Host "未找到解压后的文件夹"
+            if (-not ($appId -match '^\d+$')) {
+                Write-Host "无效的游戏ID，请输入数字"
+                Pause
+                continue
             }
-        } else {
-            Write-Host "ID $appId 下载失败，请检查ID是否正确或网络连接是否正常或DLC不支持清单！"
-        }
-    }
-    catch {
-        Write-Host "处理ID $appId 时出错: $_"
-    }
-    
-    # 然后执行功能3的操作（获取并添加DLC）
-    Write-Host "`n获取并添加DLC..."
-    $dlcList = Get-DlcList -appId $appId
-    
-    if ($dlcList -and $dlcList.Count -gt 0) {
-        Write-Host "找到以下DLC: $($dlcList -join ', ')"
-        
-        # 添加到lua文件
-        Add-DlcToLua -appId $appId -dlcList $dlcList
-        
-        # 询问是否重启Steam
-        $restartChoice = Read-Host "`n所有操作完成，是否要重启Steam以应用更改？(y/n)"
-        if ($restartChoice -eq 'y' -or $restartChoice -eq 'Y') {
+            
+            # 先执行功能2的操作（下载并处理文件）
+            Write-Host "`n下载并处理文件..."
+            $url = "https://gh.catmak.name/https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$appId.zip"
+            $zipFile = Join-Path $downloadPath "$appId.zip"
+            
+            if (-not (Download-File -url $url -outputFile $zipFile -isGithubUrl)) {
+                Write-Host "所有镜像下载失败，请检查网络连接或稍后再试"
+                continue
+            }
+            
             try {
-                # 结束Steam进程
-                Get-Process -Name "steam" -ErrorAction SilentlyContinue | Stop-Process -Force
-                Write-Host "已关闭Steam进程..."
+                Write-Host "下载完成，正在解压..."
                 
-                # 等待一段时间确保进程完全关闭
-                Start-Sleep -Seconds 3
+                # 解压文件
+                Expand-Archive -Path $zipFile -DestinationPath $downloadPath -Force
                 
-                # 重新启动Steam
-                $steamExe = Join-Path $steamPath "steam.exe"
-                if (Test-Path $steamExe) {
-                    Start-Process -FilePath $steamExe
-                    Write-Host "Steam已重新启动"
+                # 删除zip文件
+                Remove-Item $zipFile -Force
+                
+                # 查找解压后的文件夹
+                $extractedFolder = Get-ChildItem -Path $downloadPath -Directory | 
+                    Where-Object { $_.Name -like "ManifestHub-*" } | 
+                    Select-Object -First 1
+                
+                if ($extractedFolder) {
+                    # 移动.lua文件
+                    Get-ChildItem -Path $extractedFolder.FullName -Filter "*.lua" -Recurse | 
+                        ForEach-Object {
+                            Move-Item -Path $_.FullName -Destination $luaDestination -Force
+                            Write-Host "已移动 $($_.Name) 到 $luaDestination"
+                        }
+                    
+                    # 移动.manifest文件
+                    Get-ChildItem -Path $extractedFolder.FullName -Filter "*.manifest" -Recurse | 
+                        ForEach-Object {
+                            Move-Item -Path $_.FullName -Destination $manifestDestination -Force
+                            Write-Host "已移动 $($_.Name) 到 $manifestDestination"
+                        }
+                    
+                    # 删除解压的文件夹
+                    Remove-Item $extractedFolder.FullName -Recurse -Force
+                    Write-Host "ID $appId 文件处理完成！"
                 } else {
-                    Write-Host "未找到Steam.exe，请检查路径是否正确"
+                    Write-Host "未找到解压后的文件夹"
                 }
             }
             catch {
-                Write-Host "重启Steam时出错: $_"
+                Write-Host "处理ID $appId 时出错: $_"
             }
-        } else {
-            Write-Host "未重启Steam，请记得手动重启以使更改生效"
+            
+            # 然后执行功能3的操作（获取并添加DLC）
+            Write-Host "`n获取并添加DLC..."
+            $dlcList = Get-DlcList -appId $appId
+            
+            if ($dlcList -and $dlcList.Count -gt 0) {
+                Write-Host "找到以下DLC: $($dlcList -join ', ')"
+                
+                # 添加到lua文件
+                Add-DlcToLua -appId $appId -dlcList $dlcList
+                
+                # 询问是否重启Steam
+                $restartChoice = Read-Host "`n所有操作完成，是否要重启Steam以应用更改？(y/n)"
+                if ($restartChoice -eq 'y' -or $restartChoice -eq 'Y') {
+                    try {
+                        # 结束Steam进程
+                        Get-Process -Name "steam" -ErrorAction SilentlyContinue | Stop-Process -Force
+                        Write-Host "已关闭Steam进程..."
+                        
+                        # 等待一段时间确保进程完全关闭
+                        Start-Sleep -Seconds 3
+                        
+                        # 重新启动Steam
+                        $steamExe = Join-Path $steamPath "steam.exe"
+                        if (Test-Path $steamExe) {
+                            Start-Process -FilePath $steamExe
+                            Write-Host "Steam已重新启动"
+                        } else {
+                            Write-Host "未找到Steam.exe，请检查路径是否正确"
+                        }
+                    }
+                    catch {
+                        Write-Host "重启Steam时出错: $_"
+                    }
+                } else {
+                    Write-Host "未重启Steam，请记得手动重启以使更改生效"
+                }
+            } else {
+                Write-Host "未找到DLC或DLC列表不可用，仅完成了文件下载和处理"
+            }
+            
+            Pause
         }
-    } else {
-        Write-Host "未找到DLC或DLC列表不可用，仅完成了文件下载和处理"
-    }
-    
-    Pause
-}
         
         '4' {
             # 设置Steam路径
