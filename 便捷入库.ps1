@@ -96,10 +96,6 @@ function Update-Script {
             Write-Host "无法从任何镜像下载最新版本" -ForegroundColor Red
             return $false
         }
-
-        # 备份当前脚本
-        $backupFile = "$scriptPath.bak"
-        Copy-Item -Path $scriptPath -Destination $backupFile -Force
         
         # 替换为最新版本，确保使用UTF-8编码
         $content = Get-Content $tempFile -Raw -Encoding UTF8
@@ -821,5 +817,6 @@ do {
         }
     }
 } while ($true)
+
 
 
