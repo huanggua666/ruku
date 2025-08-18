@@ -2,7 +2,7 @@ set-executionpolicy remotesigned
 # 定义默认路径
 $downloadPath = "C:\Users\Administrator\Downloads\steamruku"
 $configFile = Join-Path $env:APPDATA "SteamToolConfig.ini"
-$currentVersion = "1.0.4"  # 当前脚本版本
+$currentVersion = "1.0.5"  # 当前脚本版本
 $updateUrl = "https://gh.catmak.name/https://github.com/huanggua666/ruku/blob/main/%E4%BE%BF%E6%8D%B7%E5%85%A5%E5%BA%93.ps1"
 $githubMirrors = @(
     "https://gh.catmak.name/",  # 默认首选
@@ -827,64 +827,139 @@ do {
 '4' {
     # 批量删除入库游戏功能
     $luaFiles = Get-ChildItem -Path $luaDestination -Filter "*.lua" -File
-    
+
     if ($luaFiles.Count -eq 0) {
         Write-Host "没有找到任何入库游戏配置"
         Pause
         continue
     }
-    
-    Write-Host "`n当前已入库的游戏列表:"
-    for ($i = 0; $i -lt $luaFiles.Count; $i++) {
-        $gameId = $luaFiles[$i].BaseName
-        Write-Host "$($i+1): $gameId"
+
+    # 询问用户是否要挂梯子获取游戏名称
+    $fetchNames = $false
+    $choice = Read-Host "`n是否要获取游戏名称(部分网络要挂梯)？(y/n, 默认n)"
+    if ($choice -eq 'y' -or $choice -eq 'Y') {
+        $fetchNames = $true
     }
-    
+
+    # 存储游戏ID和名称的映射
+    $gameInfo = @{}
+
+    if ($fetchNames) {
+        Write-Host "`n正在从Steam API获取游戏名称，请稍候...(游戏越多时间越长)" -ForegroundColor Cyan
+        Write-Host "`n时间过长请检查梯子是否挂好，等不下去按任意键返回" -ForegroundColor Yellow
+
+        # 清空输入缓冲区
+        try { while($host.UI.RawUI.KeyAvailable) { $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") | Out-Null } } catch {}
+        
+        foreach ($file in $luaFiles) {
+            # 检查按键
+            try {
+                if ([System.Console]::KeyAvailable) {
+                    $key = [System.Console]::ReadKey($true)
+                    Write-Host "`n用户按下了任意键，已取消获取游戏名称" -ForegroundColor Yellow
+                    # 回退到只显示ID
+                    $gameInfo = @{}
+                    foreach ($f in $luaFiles) {
+                        $appId = $f.BaseName
+                        $gameInfo[$appId] = "ID: $appId"
+                    }
+                    break
+                }
+            }
+            catch {
+                # 如果按键检测失败，使用你的备用方法
+                Write-Host "`n(如果界面卡住，请直接按Enter键)" -ForegroundColor Yellow
+                $null = Read-Host
+                Write-Host "`n用户按下了任意键，已取消获取游戏名称" -ForegroundColor Yellow
+                $gameInfo = @{}
+                foreach ($f in $luaFiles) {
+                    $appId = $f.BaseName
+                    $gameInfo[$appId] = "ID: $appId"
+                }
+                break
+            }
+            
+            $appId = $file.BaseName
+            try {
+                # 从Steam API获取游戏信息
+                $url = "https://store.steampowered.com/api/appdetails?appids=$appId"
+                $response = Invoke-RestMethod -Uri $url -Method Get -ErrorAction Stop
+                
+                if ($response.$appId.success -eq $true) {
+                    $gameName = $response.$appId.data.name
+                    $gameInfo[$appId] = "$gameName (ID: $appId)"
+                } else {
+                    $gameInfo[$appId] = "未知游戏 (ID: $appId)"
+                }
+            }
+            catch {
+                $gameInfo[$appId] = "获取失败 (ID: $appId)"
+            }
+        }
+    } else {
+        # 不挂梯子，只显示ID
+        foreach ($file in $luaFiles) {
+            $appId = $file.BaseName
+            $gameInfo[$appId] = "ID: $appId"
+        }
+    }
+
+    # 显示游戏列表
+    Write-Host "`n当前已入库的游戏列表:"
+    $index = 1
+    foreach ($file in $luaFiles) {
+        $appId = $file.BaseName
+        Write-Host "$($index): $($gameInfo[$appId])"
+        $index++
+    }
+
     $choice = Read-Host "`n请输入要删除的游戏编号 (用空格分隔多个编号，输入0返回)"
-    
+
     if ($choice -eq "0") {
         continue
     }
-    
+
     # 分割输入为数组并去除空值
     $choices = $choice -split '\s+' | Where-Object { $_ -match '^\d+$' -and [int]$_ -ge 1 -and [int]$_ -le $luaFiles.Count }
-    
+
     if ($choices.Count -eq 0) {
         Write-Host "没有输入有效的编号"
         Pause
         continue
     }
-    
+
     # 显示将要删除的游戏
     Write-Host "`n将要删除以下游戏:"
     $choices | ForEach-Object {
         $index = [int]$_ - 1
-        Write-Host "- $($luaFiles[$index].BaseName)"
+        $appId = $luaFiles[$index].BaseName
+        Write-Host "- $($gameInfo[$appId])"
     }
-    
+
     $confirm = Read-Host "`n确定要删除以上 $($choices.Count) 个游戏的入库配置吗？(y/n)"
-    
+
     if ($confirm -eq 'y' -or $confirm -eq 'Y') {
         $successCount = 0
         $choices | ForEach-Object {
             $index = [int]$_ - 1
             $selectedFile = $luaFiles[$index]
+            $appId = $selectedFile.BaseName
             
             try {
                 # 删除lua文件
                 Remove-Item -Path $selectedFile.FullName -Force -ErrorAction Stop
                 
                 # 尝试删除对应的manifest文件
-                $manifestFile = Join-Path $manifestDestination "$($selectedFile.BaseName).manifest"
+                $manifestFile = Join-Path $manifestDestination "$appId.manifest"
                 if (Test-Path $manifestFile) {
                     Remove-Item -Path $manifestFile -Force -ErrorAction SilentlyContinue
                 }
                 
-                Write-Host "已删除: $($selectedFile.BaseName)"
+                Write-Host "已删除: $($gameInfo[$appId])"
                 $successCount++
             }
             catch {
-                Write-Host "删除 $($selectedFile.BaseName) 时出错: $_" -ForegroundColor Red
+                Write-Host "删除 $($gameInfo[$appId]) 时出错: $_" -ForegroundColor Red
             }
         }
         
@@ -917,7 +992,7 @@ do {
             }
         }
     }
-    
+
     Pause
 }
         
