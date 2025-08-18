@@ -154,11 +154,8 @@ function Update-Script {
             return $false
         }
 
-        # 备份当前脚本
-        $backupFile = "$scriptPath.bak"
-        Copy-Item -Path $scriptPath -Destination $backupFile -Force
-        
-        # 替换为最新版本，确保使用UTF-8编码
+        # 不再创建备份文件
+        # 直接替换为最新版本，确保使用UTF-8编码
         $content = Get-Content $tempFile -Raw -Encoding UTF8
         $content | Out-File -FilePath $scriptPath -Encoding UTF8 -Force
         
@@ -1086,6 +1083,7 @@ do {
         }
     }
 } while ($true)
+
 
 
 
