@@ -2,7 +2,7 @@ set-executionpolicy remotesigned
 # 定义默认路径
 $downloadPath = "C:\Users\Administrator\Downloads\steamruku"
 $configFile = Join-Path $env:APPDATA "SteamToolConfig.ini"
-$currentVersion = "1.0.6"  # 当前脚本版本
+$currentVersion = "1.0.7"  # 当前脚本版本
 $updateUrl = "https://gh.catmak.name/https://github.com/huanggua666/ruku/blob/main/%E4%BE%BF%E6%8D%B7%E5%85%A5%E5%BA%93.ps1"
 $githubMirrors = @(
     "https://gh.catmak.name/",  # 默认首选
@@ -846,56 +846,73 @@ do {
 
     if ($fetchNames) {
         Write-Host "`n正在从Steam API获取游戏名称，请稍候...(游戏越多时间越长)" -ForegroundColor Cyan
-        Write-Host "`n时间过长请检查梯子是否挂好，等不下去按任意键返回" -ForegroundColor Yellow
+        Write-Host "总共有 $($luaFiles.Count) 个游戏需要获取名称" -ForegroundColor Cyan
 
-        # 清空输入缓冲区
-        try { while($host.UI.RawUI.KeyAvailable) { $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") | Out-Null } } catch {}
-        
+        # 设置超时时间为5秒
+        $timeout = 5
+        $startTime = Get-Date
+        $processedCount = 0
+        $totalCount = $luaFiles.Count
+
         foreach ($file in $luaFiles) {
-            # 检查按键
-            try {
-                if ([System.Console]::KeyAvailable) {
-                    $key = [System.Console]::ReadKey($true)
-                    Write-Host "`n用户按下了任意键，已取消获取游戏名称" -ForegroundColor Yellow
-                    # 回退到只显示ID
+            $processedCount++
+            $appId = $file.BaseName
+            
+            # 检查是否超时
+            if (((Get-Date) - $startTime).TotalSeconds -gt $timeout) {
+                # 显示进度
+                Write-Host "`n已获取 $($processedCount - 1)/$totalCount 个游戏名称" -ForegroundColor Yellow
+                Write-Host "当前获取速度: ~$([math]::Round(($processedCount - 1)/((Get-Date) - $startTime).TotalSeconds,1)) 个/秒" -ForegroundColor Yellow
+                
+                # 询问是否继续
+                $continue = Read-Host "获取名称耗时较长，预计还需要 ~$([math]::Round(($totalCount - $processedCount + 1)/(($processedCount - 1)/((Get-Date) - $startTime).TotalSeconds),1)) 秒。是否继续获取？(y=继续/n=停止获取名称, 默认y)"
+                if ($continue -eq 'n' -or $continue -eq 'N') {
+                    # 用户选择不继续，回退到只显示ID
                     $gameInfo = @{}
                     foreach ($f in $luaFiles) {
                         $appId = $f.BaseName
                         $gameInfo[$appId] = "ID: $appId"
                     }
+                    Write-Host "已停止获取名称，将只显示游戏ID" -ForegroundColor Yellow
                     break
                 }
-            }
-            catch {
-                # 如果按键检测失败，使用你的备用方法
-                Write-Host "`n(如果界面卡住，请直接按Enter键)" -ForegroundColor Yellow
-                $null = Read-Host
-                Write-Host "`n用户按下了任意键，已取消获取游戏名称" -ForegroundColor Yellow
-                $gameInfo = @{}
-                foreach ($f in $luaFiles) {
-                    $appId = $f.BaseName
-                    $gameInfo[$appId] = "ID: $appId"
-                }
-                break
+                $startTime = Get-Date  # 重置计时器
             }
             
-            $appId = $file.BaseName
             try {
                 # 从Steam API获取游戏信息
                 $url = "https://store.steampowered.com/api/appdetails?appids=$appId"
-                $response = Invoke-RestMethod -Uri $url -Method Get -ErrorAction Stop
+                $response = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec $timeout -ErrorAction Stop
                 
                 if ($response.$appId.success -eq $true) {
                     $gameName = $response.$appId.data.name
                     $gameInfo[$appId] = "$gameName (ID: $appId)"
+                    Write-Progress -Activity "获取游戏名称" -Status "$gameName (ID: $appId)" -PercentComplete ($processedCount/$totalCount*100)
                 } else {
                     $gameInfo[$appId] = "未知游戏 (ID: $appId)"
                 }
             }
             catch {
                 $gameInfo[$appId] = "获取失败 (ID: $appId)"
+                # 显示进度
+                Write-Host "`n已获取 $processedCount/$totalCount 个游戏名称" -ForegroundColor Yellow
+                Write-Host "当前获取速度: ~$([math]::Round($processedCount/((Get-Date) - $startTime).TotalSeconds,1)) 个/秒" -ForegroundColor Yellow
+                
+                # 询问是否继续
+                $continue = Read-Host "获取游戏名称时出错(你没挂梯子)，是否继续？(y继续/n停止获取名称, 默认y)"
+                if ($continue -eq 'n' -or $continue -eq 'N') {
+                    # 用户选择不继续，回退到只显示ID
+                    $gameInfo = @{}
+                    foreach ($f in $luaFiles) {
+                        $appId = $f.BaseName
+                        $gameInfo[$appId] = "ID: $appId"
+                    }
+                    Write-Host "已停止获取名称，将只显示游戏ID" -ForegroundColor Yellow
+                    break
+                }
             }
         }
+        Write-Progress -Activity "获取游戏名称" -Completed
     } else {
         # 不挂梯子，只显示ID
         foreach ($file in $luaFiles) {
@@ -1158,7 +1175,6 @@ do {
         }
     }
 } while ($true)
-
 
 
 
