@@ -1,7 +1,8 @@
+set-executionpolicy remotesigned
 # 定义默认路径
 $downloadPath = "C:\Users\Administrator\Downloads\steamruku"
 $configFile = Join-Path $env:APPDATA "SteamToolConfig.ini"
-$currentVersion = "1.0.3"  # 当前脚本版本
+$currentVersion = "1.0.4"  # 当前脚本版本
 $updateUrl = "https://gh.catmak.name/https://github.com/huanggua666/ruku/blob/main/%E4%BE%BF%E6%8D%B7%E5%85%A5%E5%BA%93.ps1"
 $githubMirrors = @(
     "https://gh.catmak.name/",  # 默认首选
@@ -10,6 +11,62 @@ $githubMirrors = @(
     "https://github.dpik.top/",
     "https://ghp.ml1.one/"
 )
+
+# 首次运行标志文件
+$firstRunFile = Join-Path $env:APPDATA "SteamTool_FirstRun.flag"
+
+# 检测是否首次运行
+function Test-FirstRun {
+    # 如果标志文件不存在就是首次运行
+    return -not (Test-Path $firstRunFile)
+}
+
+# 标记为非首次运行
+function Set-NotFirstRun {
+    $null = New-Item -Path $firstRunFile -ItemType File -Force
+}
+
+function Show-Welcome {
+    Clear-Host
+    Write-Host @"
+███████╗████████╗███████╗ █████╗ ███╗   ███╗
+██╔════╝╚══██╔══╝██╔════╝██╔══██╗████╗ ████║
+███████╗   ██║   █████╗  ███████║██╔████╔██║
+╚════██║   ██║   ██╔══╝  ██╔══██║██║╚██╔╝██║
+███████║   ██║   ███████╗██║  ██║██║ ╚═╝ ██║
+╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝
+"@ -ForegroundColor Cyan
+
+    Write-Host "欢迎首次使用 Steam入库工具!" -ForegroundColor Green
+    Write-Host "====================================================" -ForegroundColor Yellow
+    Write-Host "重要提示:" -ForegroundColor Red -NoNewline
+    Write-Host " 使用前请务必阅读以下注意事项:" -ForegroundColor Yellow
+    Write-Host "1. 本工具需要以管理员权限运行" -ForegroundColor Magenta
+    Write-Host "2. 使用前请关闭Steam客户端和杀毒软件" -ForegroundColor Magenta
+    Write-Host "3. 首次使用会自动下载必要组件" -ForegroundColor Magenta
+    Write-Host "4. 详细使用教程请选择菜单选项8" -ForegroundColor Green
+    Write-Host "====================================================" -ForegroundColor Yellow
+    Write-Host "按任意键继续..." -ForegroundColor Cyan
+    
+    # 兼容性更好的按键等待方法
+    try {
+        # 方法1：尝试标准控制台读取
+        [Console]::ReadKey($true) | Out-Null
+    }
+    catch {
+        # 方法2：如果失败则使用备用方法
+        Write-Host "`n(如果界面卡住，请直接按Enter键)" -ForegroundColor Yellow
+        $null = Read-Host
+    }
+    
+    Clear-Host
+}
+
+# 在脚本主逻辑开始处调用
+if (Test-FirstRun) {
+    Show-Welcome
+    Set-NotFirstRun
+}
 
 # 检查更新的函数
 function Check-Update {
@@ -96,6 +153,10 @@ function Update-Script {
             Write-Host "无法从任何镜像下载最新版本" -ForegroundColor Red
             return $false
         }
+
+        # 备份当前脚本
+        $backupFile = "$scriptPath.bak"
+        Copy-Item -Path $scriptPath -Destination $backupFile -Force
         
         # 替换为最新版本，确保使用UTF-8编码
         $content = Get-Content $tempFile -Raw -Encoding UTF8
@@ -287,6 +348,7 @@ function Download-File {
 
     return $success
 }
+
 
 function Initialize-HidDll {
     $hidDllPath = Join-Path $steamPath "hid.dll"
@@ -546,8 +608,11 @@ function Show-Menu {
     Write-Host "1: 打开 Steam 游戏库(复制appid)"
     Write-Host "2: 输入 ID 下载并处理文件"
     Write-Host "3: 自动添加游戏DLC到入库文件"
-    Write-Host "4: 设置 Steam 路径 (当前: $steamPath)"
-    Write-Host "5: 检查更新"
+    Write-Host "4: 删除入库游戏"
+    Write-Host "5: 设置 Steam 路径 (当前: $steamPath)"
+    Write-Host "6: 检查更新"
+    Write-Host "7: 重启Steam"
+    Write-Host "8: 使用教程"
     Write-Host "Q: 退出"
     Write-Host "===================================================="
 }
@@ -761,8 +826,105 @@ do {
             
             Pause
         }
+
+'4' {
+    # 批量删除入库游戏功能
+    $luaFiles = Get-ChildItem -Path $luaDestination -Filter "*.lua" -File
+    
+    if ($luaFiles.Count -eq 0) {
+        Write-Host "没有找到任何入库游戏配置"
+        Pause
+        continue
+    }
+    
+    Write-Host "`n当前已入库的游戏列表:"
+    for ($i = 0; $i -lt $luaFiles.Count; $i++) {
+        $gameId = $luaFiles[$i].BaseName
+        Write-Host "$($i+1): $gameId"
+    }
+    
+    $choice = Read-Host "`n请输入要删除的游戏编号 (用空格分隔多个编号，输入0返回)"
+    
+    if ($choice -eq "0") {
+        continue
+    }
+    
+    # 分割输入为数组并去除空值
+    $choices = $choice -split '\s+' | Where-Object { $_ -match '^\d+$' -and [int]$_ -ge 1 -and [int]$_ -le $luaFiles.Count }
+    
+    if ($choices.Count -eq 0) {
+        Write-Host "没有输入有效的编号"
+        Pause
+        continue
+    }
+    
+    # 显示将要删除的游戏
+    Write-Host "`n将要删除以下游戏:"
+    $choices | ForEach-Object {
+        $index = [int]$_ - 1
+        Write-Host "- $($luaFiles[$index].BaseName)"
+    }
+    
+    $confirm = Read-Host "`n确定要删除以上 $($choices.Count) 个游戏的入库配置吗？(y/n)"
+    
+    if ($confirm -eq 'y' -or $confirm -eq 'Y') {
+        $successCount = 0
+        $choices | ForEach-Object {
+            $index = [int]$_ - 1
+            $selectedFile = $luaFiles[$index]
+            
+            try {
+                # 删除lua文件
+                Remove-Item -Path $selectedFile.FullName -Force -ErrorAction Stop
+                
+                # 尝试删除对应的manifest文件
+                $manifestFile = Join-Path $manifestDestination "$($selectedFile.BaseName).manifest"
+                if (Test-Path $manifestFile) {
+                    Remove-Item -Path $manifestFile -Force -ErrorAction SilentlyContinue
+                }
+                
+                Write-Host "已删除: $($selectedFile.BaseName)"
+                $successCount++
+            }
+            catch {
+                Write-Host "删除 $($selectedFile.BaseName) 时出错: $_" -ForegroundColor Red
+            }
+        }
         
-        '4' {
+        Write-Host "`n成功删除了 $successCount/$($choices.Count) 个游戏"
+        
+        # 询问是否重启Steam
+        if ($successCount -gt 0) {
+            $restartChoice = Read-Host "是否要重启Steam以应用更改？(y/n)"
+            if ($restartChoice -eq 'y' -or $restartChoice -eq 'Y') {
+                try {
+                    # 结束Steam进程
+                    Get-Process -Name "steam" -ErrorAction SilentlyContinue | Stop-Process -Force
+                    Write-Host "已关闭Steam进程..."
+                    
+                    # 等待一段时间确保进程完全关闭
+                    Start-Sleep -Seconds 3
+                    
+                    # 重新启动Steam
+                    $steamExe = Join-Path $steamPath "steam.exe"
+                    if (Test-Path $steamExe) {
+                        Start-Process -FilePath $steamExe
+                        Write-Host "Steam已重新启动"
+                    } else {
+                        Write-Host "未找到Steam.exe，请检查路径是否正确"
+                    }
+                }
+                catch {
+                    Write-Host "重启Steam时出错: $_"
+                }
+            }
+        }
+    }
+    
+    Pause
+}
+        
+        '5' {
             # 设置Steam路径
             Write-Host "当前Steam路径: $steamPath"
             $newPath = Read-Host "请输入新的Steam路径 (留空保持当前路径)"
@@ -792,7 +954,7 @@ do {
             Pause
         }
 
-        '5' {
+        '6' {
         # 手动检查更新
         if (Check-Update) {
             $updateChoice = Read-Host "发现新版本，是否立即更新？(y/n)"
@@ -806,6 +968,113 @@ do {
         }
         Pause
     }
+
+    '7' {
+    # 手动重启Steam功能
+    Write-Host "`n正在尝试重启Steam..."
+    
+    try {
+        # 结束Steam进程
+        $steamProcess = Get-Process -Name "steam" -ErrorAction SilentlyContinue
+        if ($steamProcess) {
+            $steamProcess | Stop-Process -Force
+            Write-Host "已关闭Steam进程..."
+            
+            # 等待一段时间确保进程完全关闭
+            Start-Sleep -Seconds 3
+        } else {
+            Write-Host "未找到正在运行的Steam进程" -ForegroundColor Yellow
+        }
+        
+        # 重新启动Steam
+        $steamExe = Join-Path $steamPath "steam.exe"
+        if (Test-Path $steamExe) {
+            Start-Process -FilePath $steamExe
+            Write-Host "Steam已重新启动" -ForegroundColor Green
+        } else {
+            Write-Host "未找到Steam.exe，请检查路径是否正确" -ForegroundColor Red
+            Write-Host "当前Steam路径: $steamPath"
+        }
+    }
+    catch {
+        Write-Host "重启Steam时出错: $_" -ForegroundColor Red
+    }
+    
+    Pause
+}
+
+'8' {
+    # 使用教程功能
+    Clear-Host
+    Write-Host @"
+==================== Steam入库工具使用教程 ====================
+
+1. 基本准备：
+   - 确保Steam客户端已安装并关闭
+   - 工具会自动检测Steam路径，若检测失败需手动设置(选项4)
+   - 首次使用会自动下载必要的hid.dll文件
+
+2. 核心功能说明：
+
+   [选项1] 打开Steam游戏库
+   - 访问steamui.com查询游戏
+   - 在游戏商店页面中找到游戏封面右上角的数字ID点击复制
+
+   [选项2] 单个/批量入库游戏
+   - 输入游戏ID(可多个，空格分隔)
+   - 示例: 输入"123456 789012"可同时入库两个游戏
+   - 完成后重启Steam生效(选项7)
+
+   [选项3] 自动添加DLC
+   - 先确保主游戏已入库(通过选项2)
+   - 输入游戏ID自动获取所有DLC(部分网络可能需要梯子)
+
+   [选项6] 删除已入库游戏
+   - 显示所有已入库游戏列表
+   - 输入编号(可多个，空格分隔)进行批量删除
+   - 示例: 输入"1 3 5"删除第1、3、5个游戏
+
+3. 常见问题：
+   Q: 入库后游戏显示"需要购买"？
+   A: 重启本工具并重启steam
+
+   Q: 下载文件失败？
+   A: 尝试以下方法：
+      1. 检查网络连接
+      2. 使用梯子(部分资源需要)
+      3. github的国内镜像崩了,等本脚本更新
+
+   Q: 游戏无法启动？
+   A: D加密游戏或有盗版验证,或者你的系统不支持该游戏
+
+4. 文件结构说明：
+   - Steam目录
+     ├─config
+     │  ├─stplug-in       # 存放.lua入库配置
+     │  └─depotcache      # 存放.manifest清单文件
+     └─hid.dll            # 核心验证文件(勿删)
+
+5. 注意事项：
+   - 使用前备份Steam账户重要数据
+   - 部分游戏可能需要额外补丁
+   - 频繁操作可能导致Steam客户端异常
+
+6. 本脚本入库实现原理：
+   - 将steamtools的入库原理导入到了本脚本，本脚本更多的只是提供清单文件
+============================================================
+"@
+    Write-Host "按任意键返回主菜单..." -ForegroundColor Yellow
+      # 兼容性更好的按键等待方法
+    try {
+        # 方法1：尝试标准控制台读取
+        [Console]::ReadKey($true) | Out-Null
+    }
+    catch {
+        # 方法2：如果失败则使用备用方法
+        Write-Host "`n(如果界面卡住，请直接按Enter键)" -ForegroundColor Yellow
+        $null = Read-Host
+    }
+}
 
 
         'Q' {
