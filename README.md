@@ -1,0 +1,1 @@
+打不开的运行powershell执行这段代码：set-executionpolicy remotesigned
