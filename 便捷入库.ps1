@@ -2,7 +2,7 @@ set-executionpolicy remotesigned
 # 定义默认路径
 $downloadPath = "C:\Users\Administrator\Downloads\steamruku"
 $configFile = Join-Path $env:APPDATA "SteamToolConfig.ini"
-$currentVersion = "1.0.5"  # 当前脚本版本
+$currentVersion = "1.0.6"  # 当前脚本版本
 $updateUrl = "https://gh.catmak.name/https://github.com/huanggua666/ruku/blob/main/%E4%BE%BF%E6%8D%B7%E5%85%A5%E5%BA%93.ps1"
 $githubMirrors = @(
     "https://gh.catmak.name/",  # 默认首选
@@ -1158,6 +1158,7 @@ do {
         }
     }
 } while ($true)
+
 
 
 
