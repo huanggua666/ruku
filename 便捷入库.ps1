@@ -642,8 +642,8 @@ do {
                 Write-Host "`n正在处理ID: $id"
                 
                 # 构建下载URL
-                $url = "https://gh.catmak.name/https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$id.zip"
-                $zipFile = Join-Path $downloadPath "$id.zip"
+                $url = "https://gh.catmak.name/https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$id"
+                $zipFile = Join-Path $downloadPath "$id"
                 
                 if (-not (Download-File -url $url -outputFile $zipFile -isGithubUrl)) {
                     Write-Host "所有镜像下载失败，请检查网络连接或稍后再试"
@@ -733,8 +733,8 @@ do {
             
             # 先执行功能2的操作（下载并处理文件）
             Write-Host "`n下载并处理文件..."
-            $url = "https://gh.catmak.name/https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$appId.zip"
-            $zipFile = Join-Path $downloadPath "$appId.zip"
+            $url = "https://gh.catmak.name/https://github.com/SteamAutoCracks/ManifestHub/archive/refs/heads/$appId"
+            $zipFile = Join-Path $downloadPath "$appId"
             
             if (-not (Download-File -url $url -outputFile $zipFile -isGithubUrl)) {
                 Write-Host "所有镜像下载失败，请检查网络连接或稍后再试"
@@ -1175,6 +1175,7 @@ do {
         }
     }
 } while ($true)
+
 
 
 
