@@ -2,7 +2,7 @@ set-executionpolicy remotesigned
 # 定义默认路径
 $downloadPath = "C:\Users\Administrator\Downloads\steamruku"
 $configFile = Join-Path $env:APPDATA "SteamToolConfig.ini"
-$currentVersion = "1.1.1"  # 当前脚本版本
+$currentVersion = "1.1.2"  # 当前脚本版本
 $updateUrl = "https://gh.catmak.name/https://github.com/huanggua666/ruku/blob/main/%E4%BE%BF%E6%8D%B7%E5%85%A5%E5%BA%93.ps1"
 $githubMirrors = @(
     "https://gh.catmak.name/",  # 默认首选
@@ -642,8 +642,8 @@ do {
                 Write-Host "`n正在处理ID: $id"
                 
                 # 构建下载URL
-                $url = "https://gh.catmak.name/https://codeload.github.com/SteamAutoCracks/ManifestHub/zip/refs/heads/$id"
-                $zipFile = Join-Path $downloadPath "$id"
+                $url = "https://codeload.github.com/SteamAutoCracks/ManifestHub/zip/refs/heads/$id"
+                $zipFile = Join-Path $downloadPath "$id.zip"
                 
                 if (-not (Download-File -url $url -outputFile $zipFile -isGithubUrl)) {
                     Write-Host "所有镜像下载失败，请检查网络连接或稍后再试"
@@ -733,8 +733,8 @@ do {
             
             # 先执行功能2的操作（下载并处理文件）
             Write-Host "`n下载并处理文件..."
-            $url = "https://gh.catmak.name/https://codeload.github.com/SteamAutoCracks/ManifestHub/zip/refs/heads/$appId"
-            $zipFile = Join-Path $downloadPath "$appId"
+            $url = "https://codeload.github.com/SteamAutoCracks/ManifestHub/zip/refs/heads/$appId"
+            $zipFile = Join-Path $downloadPath "$appId.zip"
             
             if (-not (Download-File -url $url -outputFile $zipFile -isGithubUrl)) {
                 Write-Host "所有镜像下载失败，请检查网络连接或稍后再试"
@@ -1175,6 +1175,7 @@ do {
         }
     }
 } while ($true)
+
 
 
 
